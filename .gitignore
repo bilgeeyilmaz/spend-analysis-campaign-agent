@@ -1,0 +1,40 @@
+# Ortam / gizli bilgi
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+
+# Üretilen veri ve modeller (repoya girmez, komutla yeniden üretilir)
+data/raw/*.json
+data/processed/*
+models/*.pkl
+models/*.joblib
+logs/*
+# Ham değerlendirme koşuları üretilmiş veridir; .md raporlar teslim edilebilir
+# çıktı olduğu için versiyonlanır. (.gitignore satır sonu yorumu desteklemez —
+# yorum aynı satıra yazılırsa desenin parçası sayılır.)
+reports/*.json
+
+# Kampanya kataloğu elle tasarlandı, versiyonlanır
+!data/raw/campaigns.json
+
+# Boş dizinler repoda dursun
+!data/processed/.gitkeep
+!logs/.gitkeep
+!models/.gitkeep
+
+# macOS
+.DS_Store
+
+# Editör/araç dizinleri (conda env'e giden symlink'ler — başkasında kırık gelir)
+.claude/
+.agents/
+
+# Yerelde kalsın, repoya girmesin
+CLAUDE.md

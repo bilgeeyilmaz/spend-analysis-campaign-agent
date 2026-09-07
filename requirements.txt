@@ -1,0 +1,29 @@
+# Veri & ML
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+lightgbm>=4.3
+pyarrow>=16.0          # parquet yazımı için
+
+# Yapılandırma
+pydantic>=2.7
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# Agent / LLM 
+groq>=0.11
+
+# Servis
+fastapi>=0.111
+uvicorn[standard]>=0.30
+
+# Arayüz
+streamlit>=1.36
+plotly>=5.22
+
+# Geliştirme / Test 
+pytest>=8.2
+httpx>=0.27           # fastapi testleri için
+jupyter>=1.0
+matplotlib>=3.9
+seaborn>=0.13

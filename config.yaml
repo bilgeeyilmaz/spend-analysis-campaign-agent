@@ -1,0 +1,222 @@
+# Kampanya Öneri Agent Sistemi — merkezi konfigürasyon
+#
+# Bu dosyanın amacı: kod içinde sabit yol/parametre bırakmamak.
+# Gerçek banka verisine geçişte tek değişecek yer `data.source` bloğudur.
+
+data:
+  # "json" = sentetik veri (şimdi) | "sql" = gerçek/maskelenmiş veri (sonra)
+  source: json
+
+  json:
+    raw_dir: data/raw
+    customers_file: customers.json
+    transactions_file: transactions.json
+    campaigns_file: campaigns.json
+    interactions_file: interactions.json
+
+  # Gerçek veriye geçildiğinde doldurulacak. Şema aynı kalır, sadece kaynak değişir.
+  sql:
+    dsn: ""              # örn. "oracle+oracledb://user:pass@host:1521/?service_name=..."
+    schema: ""
+    # Banka tablolarındaki kolon adları -> bizim şema alanlarımız
+    column_map: {}
+
+  processed_dir: data/processed
+
+generator:
+  seed: 42
+  n_customers: 2000
+  n_months: 12                 # kaç aylık işlem geçmişi üretilecek
+
+  # Aylık işlem adedi segmente göre değişir. Tek sabit ortalama iki ihtiyacı birden
+  # karşılamıyor: harcama analizi (analyze_spending) müşteri başına yeterli yoğunluk
+  # ister — ayda 6 işlem 12 kategoriye dağılınca son 30 günde 3 kategori dolu, 9'u boş
+  # kalır ve düzenli gider tespiti imkânsızlaşır. KMeans ise segmentler arası gerçek
+  # davranış farkı ister. Beklenen hacim: ~340.000 işlem.
+  transactions_per_month:
+    mass: 10
+    affluent: 22
+    private: 35
+  # Kabul etiketi üretiminde kullanılan gürültü. Yükseltirsen problem zorlaşır,
+  # düşürürsen model etiket kuralını ezberler (bkz. plan: döngüsellik tuzağı).
+  label_noise: 0.25
+
+  # KVKK ticari elektronik ileti izni olan müşteri oranı. 1.0 yaparsan uygunluk
+  # kontrolü demoda hiç devreye girmez; <1.0 "bu müşteri hukuki nedenle elendi"
+  # anını mümkün kılar.
+  opt_in_rate: 0.70
+
+  # Kategori bazlı harcama ağırlıkları (toplam harcama içindeki pay).
+  #
+  # KAYNAK: TCMB "Banka ve Kredi Kartı Sektörel Harcama İstatistikleri" — 2014'ten
+  # beri haftalık, 28 alt sektör, EVDS üzerinden ücretsiz.
+  #   https://www.tcmb.gov.tr/wps/wcm/connect/TR/TCMB+TR/Main+Menu/Istatistikler/
+  #   Parasal+ve+Finansal+Istatistikler/Banka+ve+Kredi+Karti+Sektorel+Harcama+Istatistikleri/
+  #
+  # DİKKAT: aşağıdaki değerler basına yansıyan kabaca dağılımdan türetilmiş
+  # BAŞLANGIÇ değerleridir. EVDS'den güncel seriyi çekip buradaki sayıları
+  # değiştir ve kaynağı sunumda belirt — "kategori dağılımını uydurmadım, TCMB
+  # verisine kalibre ettim" cümlesi sentetik veri savunmanın en güçlü parçası.
+  # TCMB'nin 28 sektörünü bizim 12 kategorimize eşlerken toplam 1.0 olmalı.
+  category_weights:
+    market: 0.20
+    akaryakit: 0.11
+    giyim: 0.10
+    restoran: 0.10
+    online_alisveris: 0.09
+    elektronik: 0.07
+    saglik: 0.06
+    telekom: 0.06
+    seyahat: 0.05
+    eglence: 0.04
+    egitim: 0.03
+    diger: 0.09
+
+features:
+  # Özelliklerin hesaplandığı referans tarih. null ise verideki en son işlem tarihi.
+  as_of_date: null
+  recent_window_days: 30
+  long_window_days: 90
+
+models:
+  dir: models
+  segmentation:
+    algorithm: kmeans
+    k_range: [3, 4, 5, 6, 7]    # silhouette ile en iyisi seçilir
+    random_state: 42
+    # KMeans öncesi PCA. 23 davranışsal özellikte uzaklıklar seyrelir ("curse of
+    # dimensionality") ve silhouette anlamsızlaşır; korele kategori paylarını
+    # birkaç bileşene indirip kümeliyoruz. Değer = korunacak varyans oranı.
+    pca_variance: 0.90
+    # Silhouette büyük veride pahalı; bu kadar müşteri örneklenerek hesaplanır.
+    silhouette_sample: 2000
+  propensity:
+    # "lightgbm" | "hist" (sklearn HistGradientBoosting — libomp gerektirmez)
+    algorithm: lightgbm
+    test_size: 0.2
+    random_state: 42
+    # --tune-off ile çalışıldığında kullanılan sabit değerler.
+    n_estimators: 400
+    learning_rate: 0.02
+    num_leaves: 4
+    # Bir yaprakta en az bu kadar örnek olsun. Yüksek tutuluyor: müşteri başına
+    # ~6 satır var ve müşteri özellikleri o satırlarda birebir aynı, yani küçük
+    # yapraklar tek bir müşteriyi izole edip gizli eğilimini ezberleyebilir.
+    min_child_samples: 40
+
+    # Hiperparametre seçimi eğitim bölümünün İÇİNDEN ayrılan bir doğrulama
+    # kümesinde yapılır; test bölümü tek seferlik ve sadece rapor içindir.
+    # Doğrulama bölmesi de müşteri bazlıdır — aynı sızıntı burada da geçerli.
+    valid_size: 0.25
+    param_grid:
+      learning_rate: [0.01, 0.02, 0.05]
+      num_leaves: [4, 8, 16]
+      n_estimators: [200, 400]
+    # precision@1 hesabında en az bu kadar teklif almış müşteriler sayılır;
+    # tek teklif alan müşteride "sıralama" diye bir şey yok.
+    min_offers_for_ranking: 2
+
+agent:
+  # "groq" = gerçek LLM | "mock" = deterministik yedek (anahtar yoksa otomatik seçilir)
+  provider: groq
+  groq:
+    # Plan Llama 3.3 70B diyordu ama Groq hesabı o modeli sunmuyor (404,
+    # model_not_found — 18 Ağu 2026'da `client.models.list()` ile doğrulandı).
+    # Hesapta sohbet + tool-use destekleyenler: openai/gpt-oss-120b,
+    # openai/gpt-oss-20b, qwen/qwen3.6-27b, groq/compound.
+    # Model listesi değiştiğinde tek değişecek yer burasıdır; kodda model adı
+    # geçmiyor. Erişilemeyen model 404 verirse sistem yedeğe düşer, çökmez.
+    model: openai/gpt-oss-120b   # kota günlük sıfırlanıyor; 20b yedek (ayrı bütçe, ~25 sn, uydurmaya meyilli)
+    # gpt-oss ailesinin düşünme bütçesi: "low" | "medium" | "high".
+    # Ölçüldü (tek öneri akışı): high 24 sn, low 18 sn. Canlı demoda gecikme
+    # kaliteden önce gelir. Desteklemeyen modelde bu satırı sil.
+    reasoning_effort: low
+    temperature: 0.3
+    max_tokens: 1024
+    max_tool_iterations: 6      # sonsuz araç döngüsüne karşı üst sınır
+    timeout_seconds: 30
+  # Denetim (guardrails) ihlal bulursa LLM'e kaç kez düzeltme şansı verilir.
+  # 0 = doğrudan deterministik metne düş. Her düzeltme bir LLM çağrısı daha
+  # demek; ücretsiz katmanda token bütçesi dar olduğu için 1'de tutuluyor.
+  guardrail_retry: 1
+
+  # LLM'e gidecek araç çıktısının inceltilmesi (`guardrails.mask_payload`).
+  # Model 5 cümlelik bir metin kurmak için 12 aylık serinin tamamına ve 12
+  # kategoriye ihtiyaç duymuyor. İki kazanç birden: ücretsiz katmanda
+  # dakikada 8.000 token sınırı var ve tek akış bunu dolduruyordu; ayrıca
+  # daha az token = daha az gecikme. Denetim de bu inceltilmiş veriye
+  # karşı yapılır — modele göstermediğimiz kategoriden rakam gelirse
+  # bu uydurmadır ve yakalanmalıdır.
+  payload:
+    # Ölçüldü (analyze_spending, tek müşteri): 2.554 -> 1.664 bayt, %35 azalma.
+    # 0 yazmak "bu alanı hiç gönderme" demektir.
+    # `max_series_months: 0` %41'e çıkarıyor ama sohbette "son aylarda nasıl
+    # gitti?" sorusu cevapsız kalıyor; 3 ay o soruyu ayakta tutuyor.
+    max_categories: 5
+    max_series_months: 3
+    max_recurring: 2
+    max_anomalies: 2
+  top_k_campaigns: 3
+
+  # analyze_spending aracının tespit eşikleri. Koda gömülmez: sentetik veri
+  # kalibrasyonu değiştikçe burada ayarlanır.
+  spending_analysis:
+    # Kategori kırılımının varsayılan penceresi ("son 3 ayda ne harcadın").
+    default_months: 3
+    # Aylık seri (arayüzdeki grafik) bundan bağımsız ve daha uzun: 3 aylık bir
+    # grafik mevsimselliği göstermez.
+    series_months: 12
+    # Düzenli gider taraması da `default_months`'tan bağımsız. 3 aylık pencerede
+    # "aylık ödeme" iddiası 3 gözleme dayanır; 6 ay bakıp en az 3 tekrar aramak
+    # aynı eşikle çok daha güvenli bir tespit veriyor.
+    recurring_lookback_months: 6
+    # Düzenli gider: aynı merchant_id, en az bu kadar ayda birer işlem,
+    # tutar oynaması bu oranın altında, ödemeler arası gün farkı bu aralıkta.
+    recurring_min_months: 3
+    recurring_amount_tolerance: 0.15
+    recurring_gap_days: [25, 35]
+
+    # Olağandışı artış. Dört şartın DÖRDÜ birden aranır — üretilen veri üzerinde
+    # taranarak ayarlandı, tek başına "2.5 kat" kuralı müşterilerin %96'sını
+    # işaretliyordu (seyrek kategoride ayda tek işlem doğal olarak zıplar; %96
+    # uyarı vermek hiç uyarı vermemekle aynı şeydir):
+    #   1. önceki 3 ayın HEPSİNDE o kategoride harcama olmalı (taban istikrarlı)
+    #   2. taban aylık ortalama >= anomaly_min_baseline
+    #   3. son ay >= taban * anomaly_ratio_threshold
+    #   4. mutlak fark >= anomaly_min_amount (müşteriye söylemeye değer bir tutar)
+    # Bu haliyle müşterilerin ~%24'ünde tetikleniyor; generator sıçramayı %20'sine
+    # ekiyor. Gevşetirsen aracın söyledikleri anlamsızlaşır.
+    anomaly_require_full_baseline: true
+    anomaly_baseline_months: 3
+    # Kaç dönem aday olarak taranacak. Üreteç sıçramayı son ÜÇ aydan birine
+    # ekliyor; yalnız en son döneme bakmak üçte ikisini kaçırır. Dönemler
+    # takvim ayı değil 30 günlük kayan pencere — `as_of` ayın ortasındayken
+    # yarım ayı tam aylarla kıyaslamak oranı bastırıyordu.
+    anomaly_scan_windows: 3
+    # Dönemdeki en büyük TEK işlem, o kategorinin dönem toplamının bu oranını
+    # aşıyorsa artış "tek seferlik büyük alım" diye etiketlenir; aşmıyorsa
+    # "yaygın artış". Eleme yapmaz, yalnız etiketler — agent'ın kuracağı cümle
+    # buna göre değişir. Kapı olarak kullanmak precision'ı %21'den %33'e
+    # çıkarırken recall'u %30'dan %12'ye düşürüyordu, kötü takas.
+    anomaly_single_tx_share: 0.6
+
+    # İKİNCİ DEDEKTÖR — olağandışı büyük tek işlem (`buyuk_alimlar`).
+    # Yukarıdaki kategori-toplamı dedektörü istikrarlı bir taban istiyor, oysa
+    # büyük alımlar genelde düzenli harcanmayan bir kategoride yapılır ve orada
+    # taban yoktur. Ölçüldü: kategori dedektörünün ekilen sıçramalara karşı
+    # lift'i 1.13x (tesadüften farksız), bu dedektörün 3.0x.
+    # Eşik göreceli: işlem, müşterinin O KATEGORİDEKİ geçmiş sepet medyanının
+    # bu katını aşmalı. Mutlak eşik zengin müşteriyi sürekli işaretlerdi.
+    outlier_ratio: 6.0
+    outlier_min_amount: 5000
+    anomaly_ratio_threshold: 2.5
+    anomaly_min_baseline: 1500
+    anomaly_min_amount: 2500
+
+audit:
+  enabled: true
+  log_path: logs/audit.jsonl
+
+api:
+  host: 0.0.0.0
+  port: 8000

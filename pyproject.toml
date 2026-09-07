@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+# Proje kökünü sys.path'e ekler; böylece testler `from src.data.schemas import ...`
+# şeklinde import edebilir ve komutlar hangi dizinden çalıştırılırsa çalıştırılsın
+# aynı davranır.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"

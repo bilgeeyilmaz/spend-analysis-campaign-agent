@@ -1,0 +1,10 @@
+# Kurumsal tema. Renk seçimleri ölçülerek yapıldı (bkz. ui/streamlit_app.py →
+# kontrast_orani ve tests/test_ui.py): marka sarısı beyaz zeminde 1,46:1 kontrast
+# verir, yani metin ya da veri işareti olarak KULLANILAMAZ. Sarı burada dolgu ve
+# vurgu rengidir (üstüne siyah yazı gelir, 12,8:1); veri işaretleri koyu altındır.
+[theme]
+base = "light"
+primaryColor = "#A67C00"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FAFAF7"
+textColor = "#12120F"
